@@ -1,0 +1,260 @@
+# ============================================================
+# INTERACTIVE SALES ANALYTICS DASHBOARD  (Streamlit + Plotly)
+# Run with: the green Run button, OR `streamlit run "retail sales.py"`
+# Then open the URL it prints (usually http://localhost:8501)
+# ============================================================
+
+import os
+import sys
+import subprocess
+import warnings
+import numpy as np
+import pandas as pd
+
+warnings.filterwarnings("ignore")
+
+import streamlit as st
+
+# ---------------------------------------------------------------------------
+# AUTO-RELAUNCH GUARD
+# Streamlit apps MUST be started with `streamlit run`, not plain `python`.
+# If you clicked the green "Run" button (which uses `python script.py`),
+# this detects that and re-launches the file correctly through Streamlit.
+# ---------------------------------------------------------------------------
+if not st.runtime.exists():
+    print("[retail sales.py] Detected plain `python` launch -> re-launching via `streamlit run` ...")
+    subprocess.run([sys.executable, "-m", "streamlit", "run", __file__], check=True)
+    sys.exit(0)
+
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# ----------------- CONFIG -----------------
+DATA_PATH = r"C:/Users/DELL/Downloads/sales.csv"
+PALETTE = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#9B59B6", "#2ECC71"]
+
+st.set_page_config(page_title="Sales Analytics Dashboard", page_icon="📊", layout="wide")
+
+# ============================================================
+# DATA LOADING + CLEANING
+# ============================================================
+@st.cache_data
+def make_sample_data(n=2000, seed=42):
+    np.random.seed(seed)
+    dates = pd.date_range("2024-01-01", "2024-12-31", periods=n)
+    cats = ["Electronics", "Clothing", "Food", "Books"]
+    regs = ["North", "South", "East", "West"]
+    pays = ["UPI", "Card", "Cash", "Net Banking"]
+    prods = [f"Product {i}" for i in range(1, 16)]
+    df = pd.DataFrame({
+        "Date": dates,
+        "Category": np.random.choice(cats, n),
+        "Region": np.random.choice(regs, n),
+        "Payment_Method": np.random.choice(pays, n),
+        "Product_Name": np.random.choice(prods, n),
+        "Quantity": np.random.randint(1, 11, n),
+        "Unit_Price": np.random.uniform(50, 2000, n).round(2),
+    })
+    df["Total_Amount"] = (df["Quantity"] * df["Unit_Price"]).round(2)
+    return df
+
+@st.cache_data
+def load_data():
+    if os.path.exists(DATA_PATH):
+        df = pd.read_csv(DATA_PATH)
+        src = "Real file: " + DATA_PATH
+    else:
+        df = make_sample_data()
+        src = "No CSV found -> using generated SAMPLE data"
+    df.columns = [c.strip() for c in df.columns]
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date", "Quantity", "Unit_Price"])
+    df = df[df["Quantity"] > 0]
+    if "Total_Amount" not in df.columns:
+        df["Total_Amount"] = (df["Quantity"] * df["Unit_Price"]).round(2)
+    for col in ["Category", "Region", "Payment_Method", "Product_Name"]:
+        df[col] = df[col].astype(str).str.strip()
+    df["Month"] = df["Date"].dt.to_period("M").dt.to_timestamp()
+    return df.reset_index(drop=True), src
+
+df_raw, data_src = load_data()
+
+# ============================================================
+# SIDEBAR FILTERS
+# ============================================================
+st.sidebar.header("🔎 Filters")
+st.sidebar.caption(data_src)
+
+min_date, max_date = df_raw["Date"].min(), df_raw["Date"].max()
+d_range = st.sidebar.date_input("Date range", [min_date, max_date],
+                                min_value=min_date, max_value=max_date)
+cats = st.sidebar.multiselect("Category", sorted(df_raw["Category"].unique()),
+                              default=list(df_raw["Category"].unique()))
+regs = st.sidebar.multiselect("Region", sorted(df_raw["Region"].unique()),
+                              default=list(df_raw["Region"].unique()))
+pays = st.sidebar.multiselect("Payment Method", sorted(df_raw["Payment_Method"].unique()),
+                              default=list(df_raw["Payment_Method"].unique()))
+
+# Apply filters
+start, end = pd.to_datetime(d_range[0]), pd.to_datetime(d_range[1])
+mask = (
+    (df_raw["Date"] >= start) & (df_raw["Date"] <= end)
+    & (df_raw["Category"].isin(cats)) & (df_raw["Region"].isin(regs))
+    & (df_raw["Payment_Method"].isin(pays))
+)
+df = df_raw[mask].copy()
+
+if df.empty:
+    st.warning("No data matches the selected filters. Adjust the sidebar.")
+    st.stop()
+
+# ============================================================
+# KPI CARDS
+# ============================================================
+st.title("📊 Sales Analytics Dashboard")
+total_rev = df["Total_Amount"].sum()
+n_tx = len(df)
+aov = total_rev / n_tx if n_tx else 0
+avg_qty = df["Quantity"].mean()
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+kpi1.metric("Total Revenue", f"₹{total_rev:,.0f}")
+kpi2.metric("Transactions", f"{n_tx:,}")
+kpi3.metric("Avg Order Value", f"₹{aov:,.0f}")
+kpi4.metric("Avg Units / Order", f"{avg_qty:.1f}")
+
+st.markdown("---")
+
+# ============================================================
+# CHART 1: MONTHLY SALES TREND (area)
+# ============================================================
+st.subheader("1️⃣ Monthly Sales Trend")
+monthly = df.groupby("Month")["Total_Amount"].sum().reset_index()
+fig1 = px.area(monthly, x="Month", y="Total_Amount",
+               labels={"Total_Amount": "Revenue (₹)", "Month": "Month"},
+               title="Monthly Revenue Performance",
+               color_discrete_sequence=["#1f77b4"], template="plotly_white")
+fig1.update_traces(mode="lines+markers", hovertemplate="₹%{y:,.0f}<extra></extra>")
+fig1.update_layout(height=420)
+st.plotly_chart(fig1, width="stretch")
+
+# ============================================================
+# CHART 2 + 3: REVENUE BY CATEGORY  &  REGIONAL SHARE
+# ============================================================
+c1, c2 = st.columns(2)
+with c1:
+    st.subheader("2️⃣ Revenue by Category")
+    cat = df.groupby("Category")["Total_Amount"].sum().sort_values(ascending=False).reset_index()
+    fig2 = px.bar(cat, x="Category", y="Total_Amount",
+                  color="Category", color_discrete_sequence=PALETTE,
+                  title="Revenue by Product Category", template="plotly_white",
+                  labels={"Total_Amount": "Revenue (₹)"})
+    fig2.update_layout(height=400, showlegend=False)
+    st.plotly_chart(fig2, width="stretch")
+
+with c2:
+    st.subheader("3️⃣ Regional Market Share")
+    reg = df.groupby("Region")["Total_Amount"].sum().reset_index()
+    fig3 = px.pie(reg, names="Region", values="Total_Amount",
+                  color_discrete_sequence=PALETTE, hole=0.35,
+                  title="Regional Revenue Share", template="plotly_white")
+    fig3.update_traces(textinfo="percent+label")
+    fig3.update_layout(height=400)
+    st.plotly_chart(fig3, width="stretch")
+
+# ============================================================
+# CHART 4: QUANTITY DISTRIBUTION
+# ============================================================
+st.subheader("4️⃣ Quantity Distribution")
+fig4 = px.histogram(df, x="Quantity", nbins=20, color="Category",
+                    title="Distribution of Quantity per Transaction",
+                    template="plotly_white", labels={"Quantity": "Quantity (units)"})
+fig4.update_layout(height=400, bargap=0.05)
+st.plotly_chart(fig4, width="stretch")
+
+# ============================================================
+# CHART 5 + 6: PRICE vs QTY  &  CATEGORY-REGION HEATMAP
+# ============================================================
+c3, c4 = st.columns(2)
+with c3:
+    st.subheader("5️⃣ Price vs Quantity")
+    ps = df.groupby("Product_Name").agg(Unit_Price=("Unit_Price", "mean"),
+                                        Quantity=("Quantity", "mean"),
+                                        Total=("Total_Amount", "sum")).reset_index()
+    fig5 = px.scatter(ps, x="Unit_Price", y="Quantity", size="Total",
+                     color="Total", color_continuous_scale="Viridis",
+                     hover_name="Product_Name",
+                     title="Price vs Quantity (bubble = revenue)",
+                     template="plotly_white", labels={"Unit_Price": "Unit Price (₹)"})
+    fig5.update_layout(height=420)
+    st.plotly_chart(fig5, width="stretch")
+
+with c4:
+    st.subheader("6️⃣ Category × Region Heatmap")
+    pivot = df.pivot_table(values="Total_Amount", index="Category",
+                           columns="Region", aggfunc="sum").fillna(0)
+    fig6 = go.Figure(data=go.Heatmap(
+        z=pivot.values, x=pivot.columns, y=pivot.index,
+        colorscale="YlOrRd", colorbar=dict(title="Revenue (₹)"),
+        text=pivot.values.astype(int), texttemplate="₹%{text:,}",
+        hovertemplate="Cat:%{y}<br>Reg:%{x}<br>₹%{z:,.0f}<extra></extra>"))
+    fig6.update_layout(height=420, template="plotly_white",
+                       title="Revenue Matrix: Category vs Region")
+    st.plotly_chart(fig6, width="stretch")
+
+# ============================================================
+# CHART 7 + 8: PAYMENT METHOD  &  TOP 10 PRODUCTS
+# ============================================================
+c5, c6 = st.columns(2)
+with c5:
+    st.subheader("7️⃣ Payment Method Distribution")
+    pay = df["Payment_Method"].value_counts().reset_index()
+    pay.columns = ["Payment_Method", "count"]
+    fig7 = px.bar(pay, y="Payment_Method", x="count", orientation="h",
+                 color="Payment_Method", color_discrete_sequence=PALETTE,
+                 title="Customer Payment Preferences", template="plotly_white",
+                 text="count")
+    fig7.update_layout(height=420, showlegend=False, yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig7, width="stretch")
+
+with c6:
+    st.subheader("8️⃣ Top 10 Products")
+    top = df.groupby("Product_Name")["Total_Amount"].sum().sort_values().tail(10).reset_index()
+    fig8 = px.bar(top, y="Product_Name", x="Total_Amount", orientation="h",
+                 color="Total_Amount", color_continuous_scale="RdYlGn",
+                 title="Top 10 Products by Revenue", template="plotly_white",
+                 labels={"Total_Amount": "Revenue (₹)"})
+    fig8.update_layout(height=420, yaxis=dict(autorange="reversed"))
+    st.plotly_chart(fig8, width="stretch")
+
+# ============================================================
+# CHART 9: DAILY SALES DISTRIBUTION
+# ============================================================
+st.subheader("9️⃣ Daily Sales Distribution")
+daily = df.groupby(df["Date"].dt.date)["Total_Amount"].sum()
+fig9 = px.histogram(daily, x=daily.values, nbins=20,
+                    title="Daily Revenue Distribution",
+                    template="plotly_white", labels={"x": "Daily Revenue (₹)"})
+mean_d, med_d = daily.mean(), daily.median()
+fig9.add_vline(x=mean_d, line_dash="dash", line_color="red", annotation_text=f"Mean ₹{mean_d:,.0f}")
+fig9.add_vline(x=med_d, line_dash="dash", line_color="green", annotation_text=f"Median ₹{med_d:,.0f}")
+fig9.update_layout(height=400)
+st.plotly_chart(fig9, width="stretch")
+
+# ============================================================
+# CHART 10: CORRELATION HEATMAP
+# ============================================================
+st.subheader("🔟 Correlation Matrix")
+corr = df[["Quantity", "Unit_Price", "Total_Amount"]].assign(Month=df["Date"].dt.month).corr()
+labels = ["Quantity", "Unit Price", "Total Amount", "Month"]
+fig10 = go.Figure(data=go.Heatmap(
+    z=corr.values, x=labels, y=labels, zmin=-1, zmax=1, colorscale="RdBu",
+    text=corr.values.round(3), texttemplate="%{text}",
+    colorbar=dict(title="Corr."),
+    hovertemplate="%{y} vs %{x}<br>r=%{z:.3f}<extra></extra>"))
+fig10.update_layout(height=450, template="plotly_white",
+                    title="Variable Relationships & Dependencies")
+st.plotly_chart(fig10, width="stretch")
+
+st.markdown("---")
+st.caption("Built with Streamlit + Plotly · All charts are interactive (hover, zoom, filter-aware).")
