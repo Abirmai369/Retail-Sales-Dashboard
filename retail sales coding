@@ -241,20 +241,5 @@ fig9.add_vline(x=med_d, line_dash="dash", line_color="green", annotation_text=f"
 fig9.update_layout(height=400)
 st.plotly_chart(fig9, width="stretch")
 
-# ============================================================
-# CHART 10: CORRELATION HEATMAP
-# ============================================================
-st.subheader("🔟 Correlation Matrix")
-corr = df[["Quantity", "Unit_Price", "Total_Amount"]].assign(Month=df["Date"].dt.month).corr()
-labels = ["Quantity", "Unit Price", "Total Amount", "Month"]
-fig10 = go.Figure(data=go.Heatmap(
-    z=corr.values, x=labels, y=labels, zmin=-1, zmax=1, colorscale="RdBu",
-    text=corr.values.round(3), texttemplate="%{text}",
-    colorbar=dict(title="Corr."),
-    hovertemplate="%{y} vs %{x}<br>r=%{z:.3f}<extra></extra>"))
-fig10.update_layout(height=450, template="plotly_white",
-                    title="Variable Relationships & Dependencies")
-st.plotly_chart(fig10, width="stretch")
-
 st.markdown("---")
-st.caption("Built with Streamlit + Plotly · All charts are interactive (hover, zoom, filter-aware).")
+st.caption("Built with Streamlit + Plotly · 9 interactive charts (hover, zoom, filter-aware).")
